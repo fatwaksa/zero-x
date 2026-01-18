@@ -12,7 +12,7 @@ from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-# --- جلب التوكن من إعدادات Railway ---
+# --- جلب التوكن ---
 TOKEN = os.getenv("BOT_TOKEN") 
 
 class IGResetEngine:
@@ -20,20 +20,34 @@ class IGResetEngine:
         self.target = target.lower().strip()
         self.session = requests.Session()
         self.base_url = "https://www.instagram.com"
-        self.ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        self.session.headers.update({'User-Agent': self.ua})
+        
+        # قائمة متصفحات متنوعة لتجنب الكشف
+        self.user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1"
+        ]
+        self.session.headers.update({'User-Agent': random.choice(self.user_agents)})
 
     async def execute(self, status_callback):
         try:
             await status_callback("🔍 جاري فحص الحماية وتسخين الجلسة...")
+            # إضافة تأخير عشوائي بسيط لمحاكاة البشر
+            await asyncio.sleep(random.uniform(2, 4))
+            
             res = self.session.get(f"{self.base_url}/accounts/password/reset/", timeout=15)
+            
+            if res.status_code == 429:
+                return False, "السيرفر مضغوط (429): إنستقرام تطلب الانتظار قليلاً قبل المحاولة مرة أخرى."
+                
             token = self._extract_csrf(res.text)
 
             if not token:
-                return False, "Security Wall: فشل استخراج توكن الأمان (IP Block)."
+                return False, "Security Wall: فشل استخراج التوكن. قد يكون الآي بي محظوراً مؤقتاً."
 
-            await status_callback(f"🚀 يتم الآن محاولة إرسال الرست إلى: {self.target}")
-            await asyncio.sleep(1.5)
+            await status_callback(f"🚀 يتم الآن محاولة إرسال الرست...")
+            await asyncio.sleep(random.uniform(1, 3))
 
             post_headers = {
                 'X-CSRFToken': token,
@@ -54,17 +68,23 @@ class IGResetEngine:
             if response.status_code == 200:
                 resp_json = response.json()
                 if resp_json.get('status') == 'ok':
-                    return True, resp_json.get('body', 'تم إرسال رابط إعادة التعيين بنجاح!')
+                    return True, "تم إرسال رابط إعادة التعيين بنجاح! تفقد بريدك."
                 return False, resp_json.get('message', 'المستخدم غير موجود أو محظور.')
-            return False, f"Error {response.status_code}: فشل استجابة السيرفر."
+            
+            if response.status_code == 429:
+                return False, "خطأ 429: تم إرسال طلبات كثيرة جداً. انتظر 5 دقائق وحاول مجدداً."
+
+            return False, f"استجابة غير متوقعة ({response.status_code})."
+            
         except Exception as e:
-            return False, f"System Error: {str(e)[:50]}"
+            return False, f"مشكلة فنية: {str(e)[:40]}"
 
     def _extract_csrf(self, html):
         match = re.search(r'\"csrf_token\":\"(.*?)\"', html)
         if not match: match = re.search(r'csrf_token\\":\\"(.*?)\\"', html)
         return match.group(1) if match else None
 
+# --- الفلو الخاص بالبوت (نفسه مع تحسين الرسائل) ---
 class ResetStates(StatesGroup):
     waiting_for_email = State()
 
@@ -80,7 +100,7 @@ async def start_cmd(message: Message, state: FSMContext):
 @dp.message(ResetStates.waiting_for_email)
 async def process_reset(message: Message, state: FSMContext):
     target = message.text.strip()
-    status_msg = await message.answer("⏳ جاري التحقق من البيانات...")
+    status_msg = await message.answer("⏳ جاري معالجة طلبك...")
     
     async def update_status(text):
         try: await status_msg.edit_text(text)
@@ -91,9 +111,10 @@ async def process_reset(message: Message, state: FSMContext):
     await state.clear()
 
     if success:
-        await message.answer(f"✅ **تم الارسال الفعلي!**\n\n👤 المستهدف: {target}\n📩 النتيجة: {result_text}")
+        await message.answer(f"✅ **تم الارسال الفعلي!**\n\n👤 الحساب: {target}\n📩 النتيجة: {result_text}")
     else:
-        await message.answer(f"❌ **توجد مشكلة في الإرسال**\n\nالسبب: {result_text}")
+        # تحسين شكل رسالة الخطأ
+        await message.answer(f"⚠️ **فشل الإرسال**\n\nالسبب: {result_text}")
 
 async def main():
     logging.basicConfig(level=logging.INFO)
