@@ -1,10 +1,9 @@
 import os
 import json
 import asyncio
-import logging
+import random
 import requests
 import re
-import random
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher
@@ -16,7 +15,7 @@ from aiogram.fsm.state import State, StatesGroup
 # --- الإعدادات ---
 TOKEN = os.getenv("BOT_TOKEN")
 
-# --- نظام إدارة المحاولات (4 محاولات كل 24 ساعة) ---
+# --- نظام إدارة المحاولات ---
 class RateLimiter:
     def __init__(self, filename="limits.json"):
         self.filename = filename
@@ -41,13 +40,19 @@ class RateLimiter:
         user_id = str(user_id)
         now = datetime.now()
         if user_id not in self.data:
-            self.data[user_id] = {"count": 0, "reset_time": (now + timedelta(hours=self.reset_hours)).isoformat()}
+            self.data[user_id] = {
+                "count": 0,
+                "reset_time": (now + timedelta(hours=self.reset_hours)).isoformat()
+            }
             self._save_data()
             return True, self.max_attempts
         user_data = self.data[user_id]
         reset_time = datetime.fromisoformat(user_data["reset_time"])
         if now > reset_time:
-            self.data[user_id] = {"count": 0, "reset_time": (now + timedelta(hours=self.reset_hours)).isoformat()}
+            self.data[user_id] = {
+                "count": 0,
+                "reset_time": (now + timedelta(hours=self.reset_hours)).isoformat()
+            }
             self._save_data()
             return True, self.max_attempts
         if user_data["count"] < self.max_attempts:
@@ -61,7 +66,7 @@ class RateLimiter:
             self._save_data()
 
 
-# --- الكلاس الأصلي المعتمد (IGResetMaster) ---
+# --- كلاس إعادة تعيين Instagram ---
 class IGResetMaster:
     def __init__(self, email, proxy_file="proxies.txt"):
         self.email = email.lower().strip()
@@ -117,8 +122,10 @@ class IGResetMaster:
                 'Content-Type': 'application/x-www-form-urlencoded'
             }
             data = {'email_or_username': self.email, 'csrfmiddlewaretoken': token}
-            response = session.post(f"{self.base_url}/accounts/account_recovery_send_ajax/", 
-                                    data=data, headers=headers, timeout=15)
+            response = session.post(
+                f"{self.base_url}/accounts/account_recovery_send_ajax/",
+                data=data, headers=headers, timeout=15
+            )
             if response.status_code == 200:
                 out = response.json()
                 if out.get('status') == 'ok':
@@ -131,7 +138,7 @@ class IGResetMaster:
             return False, str(e)
 
 
-# --- نظام البوت ---
+# --- نظام FSM للبوت ---
 class Form(StatesGroup):
     email = State()
 
@@ -141,37 +148,41 @@ dp = Dispatcher()
 limiter = RateLimiter()
 
 
+# --- أمر البداية ---
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     allowed, info = limiter.check_user(message.from_user.id)
     if not allowed:
         return await message.answer(f"⛔️ انتهت محاولاتك. عد مجدداً بتاريخ: {info}")
-    
-    # الترحيب والمعلومات داخل الدالة async
+
+    # رسالة ترحيبية محسنة
 await message.answer(
     f"🚀 أهلاً بك {message.from_user.first_name} في بوت زيرو إكس – Instagram Reset\n\n"
     "👋 استعد لإعادة تعيين كلمة مرور حسابك على Instagram بكل سهولة.\n\n"
     "📧 أدخل إيميل حسابك للبدء.\n"
     f" المحاولات المتبقية لك: {info}\n\n"
-    "💡 البوت مجاني 100٪ | مطور: عبدالعزيز الرويلي [@em2cc](https://t.me/em2cc)\n"
+    "💡 البوت مجاني 100٪ | [قناتنا اشترك فيها ](https://t.me/YourChannelName)\n"
     "⚠️ يمنع بيع أو إعادة نشر البوت للحفاظ على أمان الجميع."
 )
+
+    # تعيين الحالة
     await state.set_state(Form.email)
 
 
+# --- التعامل مع البريد الإلكتروني ---
 @dp.message(Form.email)
 async def handle_email(message: Message, state: FSMContext):
     user_id = message.from_user.id
     email = message.text.strip()
     status_msg = await message.answer("⏳ جاري الإرسال...")
-    
+
     master = IGResetMaster(email)
     success, result = await asyncio.to_thread(master.attempt)
-    
+
     await state.clear()
     if success:
         limiter.increment_usage(user_id)
-        await status_msg.edit_text(f"✅ تم الارسال الفعلي!\nالحساب: `{email}`\nتفقد بريدك الآن.")
+        await status_msg.edit_text(f"✅ تم الإرسال بنجاح!\nالحساب: `{email}`\nتفقد بريدك الآن.")
     else:
         if "429" in result:
             await status_msg.edit_text("❌ فشل: حظر مؤقت (429)\nلم يتم خصم محاولة، انتظر 10 دقائق.")
@@ -180,6 +191,7 @@ async def handle_email(message: Message, state: FSMContext):
             await status_msg.edit_text(f"❌ فشل الإرسال\nالسبب: {result}")
 
 
+# --- تشغيل البوت ---
 async def main():
     await dp.start_polling(bot)
 
