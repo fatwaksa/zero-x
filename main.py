@@ -11,7 +11,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.enums import ParseMode  # <-- استيراد ParseMode
+from aiogram.enums import ParseMode  # لدعم الروابط Markdown
 
 # --- الإعدادات ---
 TOKEN = os.getenv("BOT_TOKEN")
@@ -41,19 +41,13 @@ class RateLimiter:
         user_id = str(user_id)
         now = datetime.now()
         if user_id not in self.data:
-            self.data[user_id] = {
-                "count": 0,
-                "reset_time": (now + timedelta(hours=self.reset_hours)).isoformat()
-            }
+            self.data[user_id] = {"count": 0, "reset_time": (now + timedelta(hours=self.reset_hours)).isoformat()}
             self._save_data()
             return True, self.max_attempts
         user_data = self.data[user_id]
         reset_time = datetime.fromisoformat(user_data["reset_time"])
         if now > reset_time:
-            self.data[user_id] = {
-                "count": 0,
-                "reset_time": (now + timedelta(hours=self.reset_hours)).isoformat()
-            }
+            self.data[user_id] = {"count": 0, "reset_time": (now + timedelta(hours=self.reset_hours)).isoformat()}
             self._save_data()
             return True, self.max_attempts
         if user_data["count"] < self.max_attempts:
@@ -123,10 +117,8 @@ class IGResetMaster:
                 'Content-Type': 'application/x-www-form-urlencoded'
             }
             data = {'email_or_username': self.email, 'csrfmiddlewaretoken': token}
-            response = session.post(
-                f"{self.base_url}/accounts/account_recovery_send_ajax/",
-                data=data, headers=headers, timeout=15
-            )
+            response = session.post(f"{self.base_url}/accounts/account_recovery_send_ajax/",
+                                    data=data, headers=headers, timeout=15)
             if response.status_code == 200:
                 out = response.json()
                 if out.get('status') == 'ok':
@@ -156,7 +148,7 @@ async def cmd_start(message: Message, state: FSMContext):
     if not allowed:
         return await message.answer(f"⛔️ انتهت محاولاتك. عد مجدداً بتاريخ: {info}")
 
-    # رسالة ترحيب محسنة مع رابط القناة
+    # الترحيب داخل نفس البلوك
     await message.answer(
         f"🚀 أهلاً بك {message.from_user.first_name} في بوت زيرو إكس – Instagram Reset 👋\n\n"
         "👋 استعد لإعادة تعيين كلمة مرور حسابك على Instagram بكل سهولة.\n\n"
@@ -167,7 +159,7 @@ async def cmd_start(message: Message, state: FSMContext):
         parse_mode=ParseMode.MARKDOWN
     )
 
-    # تعيين الحالة ضمن نفس البلوك
+    # تعيين الحالة
     await state.set_state(Form.email)
 
 
@@ -187,6 +179,7 @@ async def handle_email(message: Message, state: FSMContext):
         await status_msg.edit_text(f"✅ تم الإرسال بنجاح!\nالحساب: `{email}`\nتفقد بريدك الآن.")
     else:
         if "429" in result:
+            # لا تخصم محاولة عند 429
             await status_msg.edit_text("❌ فشل: حظر مؤقت (429)\nلم يتم خصم محاولة، انتظر 10 دقائق.")
         else:
             limiter.increment_usage(user_id)
