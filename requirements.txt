@@ -1,3 +1,5 @@
 aiogram
 requests
 beautifulsoup4
+httpx
+python-dotenv
