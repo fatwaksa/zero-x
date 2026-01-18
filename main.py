@@ -29,8 +29,7 @@ class RateLimiter:
             try:
                 with open(self.filename, 'r') as f:
                     return json.load(f)
-            except:
-                return {}
+            except: return {}
         return {}
 
     def _save_data(self):
@@ -40,32 +39,18 @@ class RateLimiter:
     def check_user(self, user_id):
         user_id = str(user_id)
         now = datetime.now()
-        
         if user_id not in self.data:
-            # مستخدم جديد
-            self.data[user_id] = {
-                "count": 0, 
-                "reset_time": (now + timedelta(hours=self.reset_hours)).isoformat()
-            }
+            self.data[user_id] = {"count": 0, "reset_time": (now + timedelta(hours=self.reset_hours)).isoformat()}
             self._save_data()
             return True, self.max_attempts
-
         user_data = self.data[user_id]
         reset_time = datetime.fromisoformat(user_data["reset_time"])
-
-        # هل انتهى وقت الانتظار؟ (مرت 24 ساعة)
         if now > reset_time:
-            self.data[user_id] = {
-                "count": 0, 
-                "reset_time": (now + timedelta(hours=self.reset_hours)).isoformat()
-            }
+            self.data[user_id] = {"count": 0, "reset_time": (now + timedelta(hours=self.reset_hours)).isoformat()}
             self._save_data()
             return True, self.max_attempts
-
-        # هل استهلك المحاولات؟
         if user_data["count"] < self.max_attempts:
             return True, self.max_attempts - user_data["count"]
-        
         return False, reset_time.strftime("%Y-%m-%d %H:%M")
 
     def increment_usage(self, user_id):
@@ -74,7 +59,7 @@ class RateLimiter:
             self.data[user_id]["count"] += 1
             self._save_data()
 
-# --- كلاس Reset Master (الكود الخاص بك تماماً) ---
+# --- الكلاس الأصلي المعتمد (IGResetMaster) ---
 class IGResetMaster:
     def __init__(self, email, proxy_file="proxies.txt"):
         self.email = email.lower().strip()
@@ -88,7 +73,6 @@ class IGResetMaster:
         ]
 
     def _load_proxies(self):
-        # إذا الملف غير موجود، يعود بقائمة فارغة ولا تحدث مشاكل
         if os.path.exists(self.proxy_file):
             with open(self.proxy_file, "r") as f:
                 return [line.strip() for line in f if line.strip()]
@@ -100,13 +84,10 @@ class IGResetMaster:
         return {"http": f"http://{p}", "https": f"http://{p}"}
 
     def _extract_token(self, session, html):
-        # 1. من الكوكيز
         token = session.cookies.get('csrftoken')
         if token: return token
-        # 2. من كود الصفحة (Regex)
         match = re.search(r'"csrf_token":"([^"]+)"', html)
         if match: return match.group(1)
-        # 3. من BeautifulSoup
         soup = BeautifulSoup(html, 'html.parser')
         meta = soup.find('input', {'name': 'csrfmiddlewaretoken'})
         return meta.get('value') if meta else None
@@ -115,23 +96,13 @@ class IGResetMaster:
         session = requests.Session()
         proxy = self._get_random_proxy()
         if proxy: session.proxies = proxy
-        
         ua = random.choice(self.user_agents)
         session.headers.update({'User-Agent': ua, 'Accept-Language': 'en-US,en;q=0.9'})
-
         try:
-            # الخطوة 1: بناء الجلسة
             session.get(f"{self.base_url}/", timeout=15)
-            
-            # الخطوة 2: الدخول لصفحة الريسيت
             res = session.get(f"{self.base_url}/accounts/password/reset/", timeout=15)
             token = self._extract_token(session, res.text)
-            
-            if not token:
-                # هذا الخطأ يحدث غالباً بسبب 429 في الصفحة الأولى
-                return False, "IP Blocked (No Token)"
-
-            # الخطوة 3: إرسال الطلب
+            if not token: return False, "Token Error (IP Blocked)"
             headers = {
                 'X-CSRFToken': token,
                 'X-Requested-With': 'XMLHttpRequest',
@@ -139,96 +110,59 @@ class IGResetMaster:
                 'Content-Type': 'application/x-www-form-urlencoded'
             }
             data = {'email_or_username': self.email, 'csrfmiddlewaretoken': token}
-            
             response = session.post(f"{self.base_url}/accounts/account_recovery_send_ajax/", 
                                    data=data, headers=headers, timeout=15)
-            
             if response.status_code == 200:
                 out = response.json()
-                if out.get('status') == 'ok':
-                    return True, "Success! Check Email."
+                if out.get('status') == 'ok': return True, "Success"
                 return False, out.get('message', 'Rejected')
-            elif response.status_code == 429:
-                return False, "Rate Limit (Too many requests)"
-            return False, f"Server Error: {response.status_code}"
+            elif response.status_code == 429: return False, "429"
+            return False, f"HTTP {response.status_code}"
+        except Exception as e: return False, str(e)
 
-        except Exception as e:
-            return False, str(e)
-
-# --- إعدادات البوت ---
+# --- نظام البوت ---
 class Form(StatesGroup):
     email = State()
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
-limiter = RateLimiter() # تهيئة نظام المحاولات
+limiter = RateLimiter()
 
 @dp.message(Command("start"))
-async def start(message: Message, state: FSMContext):
-    user_name = message.from_user.first_name
-    
-    # فحص الرصيد
+async def cmd_start(message: Message, state: FSMContext):
     allowed, info = limiter.check_user(message.from_user.id)
-    
     if not allowed:
-        await message.answer(f"⛔️ **عفواً، استهلكت الـ 4 محاولات لهذا اليوم.**\n⏰ يمكنك المحاولة مجدداً بتاريخ: {info}")
-        return
-
-    # الترحيب
-    welcome_text = (
-        f"أهلاً بك {user_name} في بوت زيرو إكس\n"
+        return await message.answer(f"⛔️ انتهت محاولاتك. عد مجدداً بتاريخ: {info}")
+    
+    await message.answer(
+        f"أهلاً بك {message.from_user.first_name} في بوت زيرو إكس\n"
         "لارسال رست انستقرام 🫆.\n\n"
         "ضع ايميل حسابك في الانستقرام 👨🏻‍💻.\n"
         f"🔢 المحاولات المتبقية: {info}"
     )
-    await message.answer(welcome_text)
     await state.set_state(Form.email)
 
 @dp.message(Form.email)
-async def process_email(message: Message, state: FSMContext):
+async def handle_email(message: Message, state: FSMContext):
     user_id = message.from_user.id
     email = message.text.strip()
+    status_msg = await message.answer("⏳ جاري الإرسال...")
     
-    # فحص مزدوج (للتأكد أن المستخدم لم يرسل عدة رسائل بسرعة)
-    allowed, info = limiter.check_user(user_id)
-    if not allowed:
-        await message.answer("⛔️ انتهت محاولاتك اليومية.")
-        await state.clear()
-        return
-
-    status_msg = await message.answer("⏳ جاري المعالجة...")
-
-    # تشغيل كودك في الخلفية
     master = IGResetMaster(email)
-    
-    # استخدمنا to_thread لكي لا يتجمد البوت
     success, result = await asyncio.to_thread(master.attempt)
-
+    
     await state.clear()
-
     if success:
-        # خصم محاولة فقط عند النجاح
         limiter.increment_usage(user_id)
-        remains = info - 1
-        await status_msg.edit_text(
-            f"✅ **تم الارسال الفعلي!**\n\n"
-            f"👤 الحساب: `{email}`\n"
-            f"📩 الحالة: {result}\n"
-            f"📉 المتبقي لك: {remains} محاولات."
-        )
+        await status_msg.edit_text(f"✅ **تم الارسال الفعلي!**\n👤 الحساب: `{email}`\n📥 تفقد بريدك الآن.")
     else:
-        # معالجة الأخطاء
-        if "Rate Limit" in result or "IP Blocked" in result:
-             # لا نخصم محاولة إذا كان الخطأ من السيرفر (429)
-             await status_msg.edit_text("⚠️ **السيرفر مشغول حالياً (429)**\nلم يتم خصم محاولة، الرجاء الانتظار قليلاً والمحاولة لاحقاً.")
+        if "429" in result:
+            await status_msg.edit_text("❌ **فشل: حظر مؤقت (429)**\nلم يتم خصم محاولة، انتظر 10 دقائق.")
         else:
-            # نخصم محاولة إذا كان الرفض من انستقرام (مثل يوزر خطأ)
             limiter.increment_usage(user_id)
-            remains = info - 1
-            await status_msg.edit_text(f"❌ **فشل الإرسال**\n\nالسبب: {result}\n📉 المتبقي لك: {remains}")
+            await status_msg.edit_text(f"❌ **فشل الإرسال**\nالسبب: {result}")
 
 async def main():
-    logging.basicConfig(level=logging.INFO)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
