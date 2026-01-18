@@ -135,10 +135,10 @@ async def cmd_start(message: Message, state: FSMContext):
         return await message.answer(f"⛔️ انتهت محاولاتك. عد مجدداً بتاريخ: {info}")
     
 await message.answer(
-    f"أهلاً بك {message.from_user.first_name} في بوت زيرو إكس!\n"
-    "لإرسال رابط إعادة تعيين إنستقرام.\n\n"
-    "ضع بريد حسابك بالإنستقرام.\n"
-    f"المحاولات المتبقية: {info}\n\n"
+    f"أهلاً بك {message.from_user.first_name} في بوت زيرو إكس\n"
+    "لارسال رست انستقرام.\n\n"
+    "ضع ايميل حسابك في الانستقرام.\n"
+    f" المحاولات المتبقية لك: {info}\n\n"
     "البوت مجاني | مطور: عبدالعزيز الرويلي @em2cc\n"
     "⚠️ غير مسموح ببيع البوت."
 )
