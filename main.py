@@ -11,10 +11,10 @@ from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-# --- الإعدادات ---
+# --- الإعدادات --- جلب التوكن من Railway
 TOKEN = os.getenv("BOT_TOKEN")
 
-# --- محرك الريسيت القوي (من كودك مباشرة) ---
+# --- كلاس منطق الإرسال (مبني على كودك الأصلي) ---
 class IGResetMaster:
     def __init__(self, email):
         self.email = email.lower().strip()
@@ -26,6 +26,7 @@ class IGResetMaster:
         ]
 
     def _extract_token(self, session, html):
+        # محاكاة المنطق الخاص بك لاستخراج التوكن بأمان
         token = session.cookies.get('csrftoken')
         if token: return token
         match = re.search(r'"csrf_token":"([^"]+)"', html)
@@ -34,20 +35,18 @@ class IGResetMaster:
         meta = soup.find('input', {'name': 'csrfmiddlewaretoken'})
         return meta.get('value') if meta else None
 
-    async def attempt(self):
-        # تشغيل طلب الـ requests في خيط (thread) منفصل لمنع تجميد البوت
-        return await asyncio.to_thread(self._sync_attempt)
+    async def run_attempt(self):
+        # استخدام asyncio.to_thread لتجنب تجميد البوت أثناء طلبات الـ HTTP
+        return await asyncio.to_thread(self._execute)
 
-    def _sync_attempt(self):
+    def _execute(self):
         session = requests.Session()
-        # ملاحظة: إذا كان لديك بروكسيات ضعها هنا في قائمة
         ua = random.choice(self.user_agents)
         session.headers.update({'User-Agent': ua, 'Accept-Language': 'en-US,en;q=0.9'})
 
         try:
             # الخطوة 1: بناء الجلسة
             session.get(f"{self.base_url}/", timeout=15)
-            
             # الخطوة 2: صفحة الريسيت
             res = session.get(f"{self.base_url}/accounts/password/reset/", timeout=15)
             token = self._extract_token(session, res.text)
@@ -55,7 +54,7 @@ class IGResetMaster:
             if not token:
                 return False, "مشكلة في توكن الأمان (IP Blocked)"
 
-            # الخطوة 3: الإرسال
+            # الخطوة 3: إرسال طلب الريسيت
             headers = {
                 'X-CSRFToken': token,
                 'X-Requested-With': 'XMLHttpRequest',
@@ -64,8 +63,10 @@ class IGResetMaster:
             }
             data = {'email_or_username': self.email, 'csrfmiddlewaretoken': token}
             
-            response = session.post(f"{self.base_url}/accounts/account_recovery_send_ajax/", 
-                                   data=data, headers=headers, timeout=15)
+            response = session.post(
+                f"{self.base_url}/accounts/account_recovery_send_ajax/", 
+                data=data, headers=headers, timeout=15
+            )
             
             if response.status_code == 200:
                 out = response.json()
@@ -76,46 +77,65 @@ class IGResetMaster:
                 return False, "Rate Limit (429)"
             return False, f"Server Error: {response.status_code}"
         except Exception as e:
-            return False, f"Connection Error: {str(e)[:30]}"
+            return False, f"خطأ في الاتصال: {str(e)[:30]}"
 
-# --- نظام البوت ---
-class ResetStates(StatesGroup):
+# --- إعدادات حالات البوت ---
+class Form(StatesGroup):
     waiting_for_email = State()
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
+# --- الترحيب المخصص ---
 @dp.message(Command("start"))
 async def start_cmd(message: Message, state: FSMContext):
     user_name = message.from_user.first_name
-    await message.answer(f"اهلاً بك {user_name} في بوت زيرو إكس\nلارسال رست انستقرام 🫆.\n\nضع ايميل حسابك في الانستقرام 👨🏻‍💻.")
-    await state.set_state(ResetStates.waiting_for_email)
+    welcome_text = (
+        f"أهلاً بك {user_name} في بوت زيرو إكس\n"
+        "لارسال رست انستقرام 🫆.\n\n"
+        "ضع ايميل حسابك في الانستقرام 👨🏻‍💻."
+    )
+    await message.answer(welcome_text)
+    await state.set_state(Form.waiting_for_email)
 
-@dp.message(ResetStates.waiting_for_email)
-async def process_reset(message: Message, state: FSMContext):
+# --- معالجة الإيميل ---
+@dp.message(Form.waiting_for_email)
+async def process_email(message: Message, state: FSMContext):
     email = message.text.strip()
-    status_msg = await message.answer("⏳ جاري معالجة الطلب، يرجى الانتظار...")
-    
-    # تنفيذ المحاولة
+    status_msg = await message.answer("⏳ جاري محاولة إرسال الرست...")
+
+    # تشغيل المنطق
     master = IGResetMaster(email)
-    success, msg = await master.attempt()
+    success, result = await master.run_attempt()
     
-    await state.clear()
+    await state.clear() # إنهاء الحالة للبدء من جديد عند الرغبة
 
     if success:
-        await status_msg.edit_text(f"✅ **تم الارسال الفعلي!**\n\n👤 الحساب: {email}\n📩 تم إرسال رابط إعادة التعيين بنجاح.")
+        await status_msg.edit_text(
+            f"✅ **تم الارسال الفعلي!**\n\n"
+            f"👤 الحساب: `{email}`\n"
+            f"📥 تفقد بريدك الآن (الوارد أو المزعج)."
+        )
     else:
-        # إذا فشل بسبب 429 أو غيره، نخبر المستخدم بالسبب بوضوح
-        error_map = {
-            "Rate Limit (429)": "السيرفر مضغوط حالياً (429). انتظر 10 دقائق وحاول مجدداً.",
-            "Success": "تم الإرسال بنجاح!"
-        }
-        final_error = error_map.get(msg, msg)
-        await status_msg.edit_text(f"❌ **توجد مشكلة في الإرسال**\n\nالسبب: {final_error}")
+        # معالجة الأخطاء
+        error_msg = "حدث خطأ غير متوقع."
+        if "429" in result:
+            error_msg = "تم حظر الآي بي مؤقتاً (429). انتظر 10 دقائق وحاول مجدداً."
+        elif "Rejected" in result:
+            error_msg = "رفض إنستقرام الطلب، تأكد من صحة اليوزر/الإيميل."
+        else:
+            error_msg = result
 
+        await status_msg.edit_text(f"❌ **توجد مشكلة في الإرسال**\n\nالسبب: {error_msg}")
+
+# --- تشغيل البوت ---
 async def main():
     logging.basicConfig(level=logging.INFO)
+    print("🚀 بوت زيرو إكس يعمل الآن...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        pass
