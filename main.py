@@ -7,16 +7,21 @@ import re
 import random
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 # --- الإعدادات ---
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN") 
+# تأكد من وضع التوكن الخاص بك هنا إذا كنت تشغل الملف محلياً، أو اتركه os.getenv إذا كنت تستخدم استضافة
+# TOKEN = "YOUR_BOT_TOKEN_HERE" 
 
-# --- نظام إدارة المحاولات (4 محاولات كل 24 ساعة) ---
+# إعداد السجل (Logging) لمعرفة الأخطاء
+logging.basicConfig(level=logging.INFO)
+
+# --- نظام إدارة المحاولات (RateLimiter) ---
 class RateLimiter:
     def __init__(self, filename="limits.json"):
         self.filename = filename
@@ -44,14 +49,18 @@ class RateLimiter:
             self.data[user_id] = {"count": 0, "reset_time": (now + timedelta(hours=self.reset_hours)).isoformat()}
             self._save_data()
             return True, self.max_attempts
+        
         user_data = self.data[user_id]
         reset_time = datetime.fromisoformat(user_data["reset_time"])
+        
         if now > reset_time:
             self.data[user_id] = {"count": 0, "reset_time": (now + timedelta(hours=self.reset_hours)).isoformat()}
             self._save_data()
             return True, self.max_attempts
+        
         if user_data["count"] < self.max_attempts:
             return True, self.max_attempts - user_data["count"]
+        
         return False, reset_time.strftime("%Y-%m-%d %H:%M")
 
     def increment_usage(self, user_id):
@@ -60,73 +69,139 @@ class RateLimiter:
             self.data[user_id]["count"] += 1
             self._save_data()
 
-
-# --- الكلاس الأصلي المعتمد (IGResetMaster) ---
+# --- الكلاس المطور (IGResetMaster) ---
 class IGResetMaster:
     def __init__(self, email, proxy_file="proxies.txt"):
         self.email = email.lower().strip()
         self.proxy_file = proxy_file
         self.proxies = self._load_proxies()
         self.base_url = "https://www.instagram.com"
+        # قائمة User-Agents حديثة
         self.user_agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
-            "Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.162 Mobile Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0"
         ]
 
     def _load_proxies(self):
+        # إذا الملف غير موجود أو فارغ، نرجع قائمة فارغة (بدون أخطاء)
         if os.path.exists(self.proxy_file):
-            with open(self.proxy_file, "r") as f:
-                return [line.strip() for line in f if line.strip()]
+            try:
+                with open(self.proxy_file, "r") as f:
+                    return [line.strip() for line in f if line.strip()]
+            except:
+                return []
         return []
 
     def _get_random_proxy(self):
         if not self.proxies:
             return None
         p = random.choice(self.proxies)
-        return {"http": f"http://{p}", "https": f"http://{p}"}
+        # دعم تنسيق البروكسي البسيط ip:port
+        if not p.startswith("http"):
+             return {"http": f"http://{p}", "https": f"http://{p}"}
+        return {"http": p, "https": p}
 
     def _extract_token(self, session, html):
+        # محاولة 1: من الكوكيز
         token = session.cookies.get('csrftoken')
-        if token:
-            return token
+        if token: return token
+        
+        # محاولة 2: Regex JSON
         match = re.search(r'"csrf_token":"([^"]+)"', html)
-        if match:
-            return match.group(1)
-        soup = BeautifulSoup(html, 'html.parser')
-        meta = soup.find('input', {'name': 'csrfmiddlewaretoken'})
-        return meta.get('value') if meta else None
+        if match: return match.group(1)
+        
+        # محاولة 3: Regex JavaScript Config
+        match_config = re.search(r'csrf_token\\":\\"([^"]+)\\"', html)
+        if match_config: return match_config.group(1)
+
+        # محاولة 4: BeautifulSoup
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            meta = soup.find('input', {'name': 'csrfmiddlewaretoken'})
+            return meta.get('value') if meta else None
+        except:
+            return None
 
     def attempt(self):
         session = requests.Session()
         proxy = self._get_random_proxy()
+        
         if proxy:
             session.proxies = proxy
+            print(f"Using Proxy: {proxy}") # للتجربة
+
         ua = random.choice(self.user_agents)
-        session.headers.update({'User-Agent': ua, 'Accept-Language': 'en-US,en;q=0.9'})
+        
+        # ترويسات محسنة لتجنب الكشف
+        session.headers.update({
+            'User-Agent': ua,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Site': 'same-origin',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Dest': 'document',
+            'Connection': 'keep-alive'
+        })
+
         try:
-            session.get(f"{self.base_url}/", timeout=15)
-            res = session.get(f"{self.base_url}/accounts/password/reset/", timeout=15)
+            # الخطوة 1: زيارة الصفحة الرئيسية للحصول على الكوكيز الأولية
+            session.get(f"{self.base_url}/", timeout=20)
+            
+            # الخطوة 2: زيارة صفحة الريسيت
+            reset_url = f"{self.base_url}/accounts/password/reset/"
+            res = session.get(reset_url, timeout=20)
+            
             token = self._extract_token(session, res.text)
             if not token:
-                return False, "Token Error (IP Blocked)"
+                # إذا فشل استخراج التوكين، غالباً IP محظور
+                return False, "IP Blocked (No Token)"
+
+            # تحديث الترويسات لطلب الـ AJAX
             headers = {
                 'X-CSRFToken': token,
                 'X-Requested-With': 'XMLHttpRequest',
-                'Referer': f'{self.base_url}/accounts/password/reset/',
-                'Content-Type': 'application/x-www-form-urlencoded'
+                'Referer': reset_url,
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-IG-App-ID': '936619743392459', # معرف تطبيق انستجرام ويب
+                'X-Instagram-AJAX': '1',
+                'Origin': self.base_url
             }
-            data = {'email_or_username': self.email, 'csrfmiddlewaretoken': token}
-            response = session.post(f"{self.base_url}/accounts/account_recovery_send_ajax/", 
-                                    data=data, headers=headers, timeout=15)
+            
+            data = {
+                'email_or_username': self.email,
+                'csrfmiddlewaretoken': token
+            }
+            
+            # الخطوة 3: إرسال طلب POST
+            response = session.post(
+                f"{self.base_url}/accounts/account_recovery_send_ajax/", 
+                data=data, 
+                headers=headers, 
+                timeout=20
+            )
+            
             if response.status_code == 200:
-                out = response.json()
-                if out.get('status') == 'ok':
-                    return True, "Success"
-                return False, out.get('message', 'Rejected')
+                try:
+                    out = response.json()
+                    if out.get('status') == 'ok':
+                        return True, "Success"
+                    # التحقق مما إذا كان انستجرام يطلب تحقق كابتشا أو غيره
+                    if 'checkpoint_url' in out:
+                         return False, "Checkpoint Required (Captcha)"
+                    return False, out.get('message', 'Rejected by IG')
+                except:
+                    return False, "Invalid JSON Response"
+            
             elif response.status_code == 429:
-                return False, "429"
+                return False, "429" # إشارة خاصة للحظر
+            
+            elif response.status_code == 403:
+                return False, "403 Forbidden (IP Ban)"
+
             return False, f"HTTP {response.status_code}"
+            
         except Exception as e:
             return False, str(e)
 
@@ -135,11 +210,9 @@ class IGResetMaster:
 class Form(StatesGroup):
     email = State()
 
-
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 limiter = RateLimiter()
-
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
@@ -147,42 +220,59 @@ async def cmd_start(message: Message, state: FSMContext):
     if not allowed:
         return await message.answer(f"⛔️ انتهت محاولاتك. عد مجدداً بتاريخ: {info}")
     
-    # الترحيب والمعلومات داخل الدالة async
-await message.answer(
-    f"🚀 أهلاً بك {message.from_user.first_name} في بوت زيرو إكس – Instagram Reset\n\n"
-    "👋 استعد لإعادة تعيين كلمة مرور حسابك على Instagram بكل سهولة.\n\n"
-    "📧 أدخل إيميل حسابك للبدء.\n"
-    f" المحاولات المتبقية لك: {info}\n\n"
-    "💡 البوت مجاني 100٪ | مطور: عبدالعزيز الرويلي [@em2cc](https://t.me/em2cc)\n"
-    "⚠️ يمنع بيع أو إعادة نشر البوت للحفاظ على أمان الجميع."
-)
+    # تم إصلاح المسافة البادئة (Indentation) هنا
+    await message.answer(
+        f"🚀 أهلاً بك {message.from_user.first_name} في بوت Instagram Reset\n\n"
+        "📧 أرسل البريد الإلكتروني (Email) أو اليوزر لبدء العملية.\n"
+        f"🔢 المحاولات المتبقية: {info}\n"
+    )
     await state.set_state(Form.email)
-
 
 @dp.message(Form.email)
 async def handle_email(message: Message, state: FSMContext):
     user_id = message.from_user.id
     email = message.text.strip()
-    status_msg = await message.answer("⏳ جاري الإرسال...")
     
+    # تحقق بسيط من صحة المدخل
+    if len(email) < 3:
+        return await message.answer("⚠️ يرجى إدخال بريد أو يوزر صحيح.")
+
+    status_msg = await message.answer(f"⏳ جاري محاولة استعادة: `{email}` ...")
+    
+    # تشغيل العملية في Thread منفصل لعدم تجميد البوت
     master = IGResetMaster(email)
     success, result = await asyncio.to_thread(master.attempt)
     
     await state.clear()
+    
     if success:
         limiter.increment_usage(user_id)
-        await status_msg.edit_text(f"✅ تم الارسال الفعلي!\nالحساب: `{email}`\nتفقد بريدك الآن.")
+        await status_msg.edit_text(
+            f"✅ **تم الإرسال بنجاح!**\n\n"
+            f"📩 الحساب: `{email}`\n"
+            f"ℹ️ تفقد البريد الوارد أو الرسائل غير المرغوبة (Spam)."
+        )
     else:
+        # معالجة ذكية للأخطاء
         if "429" in result:
-            await status_msg.edit_text("❌ فشل: حظر مؤقت (429)\nلم يتم خصم محاولة، انتظر 10 دقائق.")
+            # لا نخصم محاولة من المستخدم لأن الخطأ من السيرفر
+            await status_msg.edit_text(
+                "❌ **السيرفر مشغول جداً (429)**\n"
+                "⚠️ لم يتم خصم محاولة. يرجى الانتظار 5-10 دقائق والمحاولة مرة أخرى."
+            )
+        elif "IP Blocked" in result:
+             await status_msg.edit_text("❌ فشل: IP السيرفر محظور حالياً من انستجرام.")
         else:
+            # نخصم محاولة لأن الطلب وصل وانستجرام رفضه (مثل إيميل خطأ)
             limiter.increment_usage(user_id)
             await status_msg.edit_text(f"❌ فشل الإرسال\nالسبب: {result}")
 
-
 async def main():
+    print("Bot started...")
     await dp.start_polling(bot)
 
-
 if __name__ == "__main__":
-    asyncio.run(main()) حسّنه
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Bot stopped")
