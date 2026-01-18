@@ -11,6 +11,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.enums import ParseMode  # <-- استيراد ParseMode
 
 # --- الإعدادات ---
 TOKEN = os.getenv("BOT_TOKEN")
@@ -64,6 +65,7 @@ class RateLimiter:
         if user_id in self.data:
             self.data[user_id]["count"] += 1
             self._save_data()
+
 
 # --- كلاس إعادة تعيين Instagram ---
 class IGResetMaster:
@@ -136,13 +138,16 @@ class IGResetMaster:
         except Exception as e:
             return False, str(e)
 
+
 # --- نظام FSM للبوت ---
 class Form(StatesGroup):
     email = State()
 
+
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 limiter = RateLimiter()
+
 
 # --- أمر البداية ---
 @dp.message(Command("start"))
@@ -152,18 +157,19 @@ async def cmd_start(message: Message, state: FSMContext):
         return await message.answer(f"⛔️ انتهت محاولاتك. عد مجدداً بتاريخ: {info}")
 
     # رسالة ترحيب محسنة مع رابط القناة
-await message.answer(
-    f"🚀 أهلاً بك {message.from_user.first_name} في بوت زيرو إكس – Instagram Reset 👋\n\n"
-    "👋 استعد لإعادة تعيين كلمة مرور حسابك على Instagram بكل سهولة.\n\n"
-    "📧 أدخل إيميل حسابك للبدء.\n"
-    f"🔢 المحاولات المتبقية لك: {info}\n\n"
-    "💡 البوت مجاني 100٪ | [قناتي](https://t.me/i3azz)\n"
-    "⚠️ يمنع بيع أو إعادة نشر البوت للحفاظ على أمان الجميع.",
-    parse_mode=ParseMode.MARKDOWN
-)
+    await message.answer(
+        f"🚀 أهلاً بك {message.from_user.first_name} في بوت زيرو إكس – Instagram Reset 👋\n\n"
+        "👋 استعد لإعادة تعيين كلمة مرور حسابك على Instagram بكل سهولة.\n\n"
+        "📧 أدخل إيميل حسابك للبدء.\n"
+        f"🔢 المحاولات المتبقية لك: {info}\n\n"
+        "💡 البوت مجاني 100٪ | [قناتي](https://t.me/i3azz)\n"
+        "⚠️ يمنع بيع أو إعادة نشر البوت للحفاظ على أمان الجميع.",
+        parse_mode=ParseMode.MARKDOWN
+    )
 
     # تعيين الحالة ضمن نفس البلوك
     await state.set_state(Form.email)
+
 
 # --- التعامل مع البريد الإلكتروني ---
 @dp.message(Form.email)
@@ -186,9 +192,11 @@ async def handle_email(message: Message, state: FSMContext):
             limiter.increment_usage(user_id)
             await status_msg.edit_text(f"❌ فشل الإرسال\nالسبب: {result}")
 
+
 # --- تشغيل البوت ---
 async def main():
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
