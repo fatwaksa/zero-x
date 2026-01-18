@@ -8,15 +8,18 @@ from bs4 import BeautifulSoup
 import requests
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, ParseMode
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import ParseMode
 
-# --- إعدادات البوت ---
-TOKEN = os.getenv("BOT_TOKEN")  # ضع التوكن هنا إذا لم تستخدم env
+# ------------------------------
+# إعدادات البوت
+# ------------------------------
+TOKEN = os.getenv("BOT_TOKEN")  # ضع التوكن مباشرة هنا إذا لم تستخدم env
 
-# --- نظام إدارة المحاولات (4 محاولات لكل 24 ساعة) ---
+# ------------------------------
+# نظام إدارة المحاولات (Rate Limiter)
+# ------------------------------
 class RateLimiter:
     def __init__(self, filename="limits.json"):
         self.filename = filename
@@ -41,17 +44,27 @@ class RateLimiter:
         user_id = str(user_id)
         now = datetime.now()
         if user_id not in self.data:
-            self.data[user_id] = {"count": 0, "reset_time": (now + timedelta(hours=self.reset_hours)).isoformat()}
+            self.data[user_id] = {
+                "count": 0, 
+                "reset_time": (now + timedelta(hours=self.reset_hours)).isoformat()
+            }
             self._save_data()
             return True, self.max_attempts
+
         user_data = self.data[user_id]
         reset_time = datetime.fromisoformat(user_data["reset_time"])
+
         if now > reset_time:
-            self.data[user_id] = {"count": 0, "reset_time": (now + timedelta(hours=self.reset_hours)).isoformat()}
+            self.data[user_id] = {
+                "count": 0,
+                "reset_time": (now + timedelta(hours=self.reset_hours)).isoformat()
+            }
             self._save_data()
             return True, self.max_attempts
+
         if user_data["count"] < self.max_attempts:
             return True, self.max_attempts - user_data["count"]
+
         return False, reset_time.strftime("%Y-%m-%d %H:%M")
 
     def increment_usage(self, user_id):
@@ -61,7 +74,9 @@ class RateLimiter:
             self._save_data()
 
 
-# --- بوت Instagram Reset محسّن 99٪ ---
+# ------------------------------
+# بوت Instagram Reset محسّن
+# ------------------------------
 class IGResetMaster:
     def __init__(self, email):
         self.email = email.lower().strip()
@@ -73,15 +88,14 @@ class IGResetMaster:
         ]
 
     def _extract_token(self, session, html):
-        # 1. من الكوكيز
         token = session.cookies.get('csrftoken')
-        if token: 
+        if token:
             return token
-        # 2. Regex
+
         match = re.search(r'"csrf_token":"([^"]+)"', html)
-        if match: 
+        if match:
             return match.group(1)
-        # 3. BeautifulSoup
+
         soup = BeautifulSoup(html, 'html.parser')
         meta = soup.find('input', {'name': 'csrfmiddlewaretoken'})
         return meta.get('value') if meta else None
@@ -96,15 +110,17 @@ class IGResetMaster:
         })
 
         try:
-            # زيارة الصفحة الرئيسية لبناء الجلسة
+            # 1️⃣ زيارة الصفحة الرئيسية لبناء الجلسة
             session.get(f"{self.base_url}/", timeout=15)
-            # الدخول لصفحة إعادة التعيين
+            
+            # 2️⃣ الدخول لصفحة إعادة التعيين
             res = session.get(f"{self.base_url}/accounts/password/reset/", timeout=15)
             token = self._extract_token(session, res.text)
-            if not token:
-                return False, "Token Error (IP Blocked?)"
 
-            # إرسال الطلب مع جميع Headers المطلوبة
+            if not token:
+                return False, "Token Error: Instagram Blocked Session"
+
+            # 3️⃣ إرسال الطلب
             headers = {
                 'X-CSRFToken': token,
                 'X-Requested-With': 'XMLHttpRequest',
@@ -122,16 +138,19 @@ class IGResetMaster:
                 out = response.json()
                 if out.get('status') == 'ok':
                     return True, "✅ تم الإرسال بنجاح! تحقق من بريدك."
-                return False, out.get('message', 'Rejected')
+                return False, out.get('message', 'رفض الطلب')
             elif response.status_code == 429:
-                return False, "❌ حظر مؤقت 429: انتظر قليلًا قبل المحاولة التالية"
-            return False, f"HTTP {response.status_code}"
+                return False, "❌ حظر مؤقت (429)"
+            else:
+                return False, f"HTTP {response.status_code}"
 
         except Exception as e:
             return False, str(e)
 
 
-# --- نظام FSM ---
+# ------------------------------
+# FSM لإدارة الحالة
+# ------------------------------
 class Form(StatesGroup):
     email = State()
 
@@ -141,16 +160,19 @@ dp = Dispatcher()
 limiter = RateLimiter()
 
 
+# ------------------------------
+# رسالة الترحيب
+# ------------------------------
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     allowed, info = limiter.check_user(message.from_user.id)
     if not allowed:
         return await message.answer(f"⛔️ انتهت محاولاتك. عد مجدداً بتاريخ: {info}")
-    
+
     await message.answer(
         f"🚀 أهلاً بك {message.from_user.first_name} في بوت زيرو إكس – Instagram Reset\n\n"
         "👋 استعد لإعادة تعيين كلمة مرور حسابك على Instagram بكل سهولة.\n\n"
-        "📧 أدخل إيميل حسابك للبدء.\n"
+        f"📧 أدخل إيميل حسابك للبدء.\n"
         f"🔢 المحاولات المتبقية لك: {info}\n\n"
         "💡 البوت مجاني 100٪ | [قناتي](https://t.me/i3azz)\n"
         "⚠️ يمنع بيع أو إعادة نشر البوت للحفاظ على أمان الجميع.",
@@ -159,6 +181,9 @@ async def cmd_start(message: Message, state: FSMContext):
     await state.set_state(Form.email)
 
 
+# ------------------------------
+# التعامل مع البريد الإلكتروني
+# ------------------------------
 @dp.message(Form.email)
 async def handle_email(message: Message, state: FSMContext):
     user_id = message.from_user.id
@@ -171,15 +196,23 @@ async def handle_email(message: Message, state: FSMContext):
     await state.clear()
     if success:
         limiter.increment_usage(user_id)
-        await status_msg.edit_text(f"✅ تم الإرسال الفعلي!\nالحساب: `{email}`\nتفقد بريدك الآن.", parse_mode=ParseMode.MARKDOWN)
+        await status_msg.edit_text(
+            f"✅ تم الإرسال الفعلي!\nالحساب: `{email}`\nتفقد بريدك الآن.",
+            parse_mode=ParseMode.MARKDOWN
+        )
     else:
         if "429" in result:
-            await status_msg.edit_text("❌ فشل: حظر مؤقت (429)\nلم يتم خصم محاولة، انتظر 10 دقائق.")
+            await status_msg.edit_text(
+                "❌ فشل: حظر مؤقت (429)\nلم يتم خصم محاولة، انتظر 10 دقائق."
+            )
         else:
             limiter.increment_usage(user_id)
             await status_msg.edit_text(f"❌ فشل الإرسال\nالسبب: {result}")
 
 
+# ------------------------------
+# تشغيل البوت
+# ------------------------------
 async def main():
     await dp.start_polling(bot)
 
