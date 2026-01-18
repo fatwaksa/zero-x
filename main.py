@@ -1,14 +1,13 @@
 import os
 import json
-import time
-import random
 import asyncio
 import logging
 import requests
 import re
+import random
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
@@ -16,99 +15,6 @@ from aiogram.fsm.state import State, StatesGroup
 
 # --- الإعدادات ---
 TOKEN = os.getenv("BOT_TOKEN")
-
-# قائمة البروكسيات (مدمجة لضمان العمل)
-PROXY_LIST_RAW = """
-104.16.109.201:80
-103.160.204.92:80
-66.235.200.49:80
-23.227.39.16:80
-172.67.77.203:80
-103.160.204.17:80
-103.160.204.11:80
-103.160.204.52:80
-103.160.204.87:80
-185.176.24.12:80
-45.67.215.254:80
-103.160.204.47:80
-103.160.204.90:80
-103.160.204.19:80
-185.176.24.174:80
-103.160.204.76:80
-188.42.88.243:80
-190.93.246.15:80
-104.20.36.8:80
-31.12.75.89:80
-23.227.39.128:80
-23.227.39.208:80
-172.67.181.92:80
-46.254.93.99:80
-154.83.2.80:80
-91.193.59.85:80
-23.227.39.14:80
-185.176.26.39:80
-45.131.208.57:80
-104.17.233.39:80
-198.41.203.79:80
-104.17.189.79:80
-45.67.215.140:80
-45.194.53.78:80
-91.193.58.111:80
-46.254.92.16:80
-173.245.49.50:80
-45.131.208.76:80
-104.18.190.53:80
-104.17.137.84:80
-172.67.179.169:80
-172.67.254.47:80
-185.176.24.10:80
-198.41.207.78:80
-154.197.75.157:80
-190.93.245.33:80
-154.197.75.152:80
-154.197.75.150:80
-154.197.75.151:80
-154.197.75.156:80
-154.197.75.159:80
-184.168.47.49:80
-172.67.71.37:80
-108.162.193.229:80
-104.17.128.227:80
-108.162.193.222:80
-108.162.193.224:80
-195.85.23.103:80
-108.162.193.225:80
-108.162.193.221:80
-172.67.70.118:80
-108.162.193.223:80
-108.162.193.227:80
-198.41.198.154:80
-104.25.190.51:80
-172.67.229.11:80
-46.254.92.10:80
-159.246.55.1:80
-162.159.242.183:80
-104.26.13.218:80
-104.21.13.218:80
-162.159.242.161:80
-164.38.155.61:80
-162.159.242.189:80
-162.159.242.102:80
-162.159.242.131:80
-162.159.242.147:80
-162.159.242.172:80
-162.159.242.136:80
-45.67.215.162:80
-195.85.23.236:80
-154.92.9.212:80
-91.193.59.156:80
-5.10.247.193:80
-164.38.155.96:80
-5.10.244.193:80
-45.131.6.68:80
-104.17.196.97:80
-188.132.222.15:8080
-"""
 
 # --- نظام إدارة المحاولات (4 محاولات كل 24 ساعة) ---
 class RateLimiter:
@@ -136,19 +42,27 @@ class RateLimiter:
         now = datetime.now()
         
         if user_id not in self.data:
-            self.data[user_id] = {"count": 0, "reset_time": str(now + timedelta(hours=self.reset_hours))}
+            # مستخدم جديد
+            self.data[user_id] = {
+                "count": 0, 
+                "reset_time": (now + timedelta(hours=self.reset_hours)).isoformat()
+            }
             self._save_data()
             return True, self.max_attempts
 
         user_data = self.data[user_id]
         reset_time = datetime.fromisoformat(user_data["reset_time"])
 
+        # هل انتهى وقت الانتظار؟ (مرت 24 ساعة)
         if now > reset_time:
-            # إعادة تعيين الوقت والعداد
-            self.data[user_id] = {"count": 0, "reset_time": str(now + timedelta(hours=self.reset_hours))}
+            self.data[user_id] = {
+                "count": 0, 
+                "reset_time": (now + timedelta(hours=self.reset_hours)).isoformat()
+            }
             self._save_data()
             return True, self.max_attempts
 
+        # هل استهلك المحاولات؟
         if user_data["count"] < self.max_attempts:
             return True, self.max_attempts - user_data["count"]
         
@@ -160,11 +74,12 @@ class RateLimiter:
             self.data[user_id]["count"] += 1
             self._save_data()
 
-# --- كلاس الريسيت (نفس كودك مع تحسين التكرار) ---
+# --- كلاس Reset Master (الكود الخاص بك تماماً) ---
 class IGResetMaster:
-    def __init__(self, email):
+    def __init__(self, email, proxy_file="proxies.txt"):
         self.email = email.lower().strip()
-        self.proxies = [p.strip() for p in PROXY_LIST_RAW.split('\n') if p.strip()]
+        self.proxy_file = proxy_file
+        self.proxies = self._load_proxies()
         self.base_url = "https://www.instagram.com"
         self.user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -172,141 +87,145 @@ class IGResetMaster:
             "Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.162 Mobile Safari/537.36"
         ]
 
+    def _load_proxies(self):
+        # إذا الملف غير موجود، يعود بقائمة فارغة ولا تحدث مشاكل
+        if os.path.exists(self.proxy_file):
+            with open(self.proxy_file, "r") as f:
+                return [line.strip() for line in f if line.strip()]
+        return []
+
     def _get_random_proxy(self):
         if not self.proxies: return None
         p = random.choice(self.proxies)
         return {"http": f"http://{p}", "https": f"http://{p}"}
 
     def _extract_token(self, session, html):
+        # 1. من الكوكيز
         token = session.cookies.get('csrftoken')
         if token: return token
+        # 2. من كود الصفحة (Regex)
         match = re.search(r'"csrf_token":"([^"]+)"', html)
         if match: return match.group(1)
+        # 3. من BeautifulSoup
         soup = BeautifulSoup(html, 'html.parser')
         meta = soup.find('input', {'name': 'csrfmiddlewaretoken'})
         return meta.get('value') if meta else None
 
-    # دالة المحاولة الذكية (تلف على البروكسيات حتى تنجح)
-    def execute_smartly(self):
-        # سنحاول 15 مرة ببروكسيات مختلفة قبل الاستسلام
-        max_internal_retries = 15 
+    def attempt(self):
+        session = requests.Session()
+        proxy = self._get_random_proxy()
+        if proxy: session.proxies = proxy
         
-        for i in range(max_internal_retries):
-            session = requests.Session()
-            proxy = self._get_random_proxy()
-            if proxy: session.proxies.update(proxy)
+        ua = random.choice(self.user_agents)
+        session.headers.update({'User-Agent': ua, 'Accept-Language': 'en-US,en;q=0.9'})
+
+        try:
+            # الخطوة 1: بناء الجلسة
+            session.get(f"{self.base_url}/", timeout=15)
             
-            ua = random.choice(self.user_agents)
-            session.headers.update({
-                'User-Agent': ua, 
-                'Accept-Language': 'en-US,en;q=0.9',
-                'X-Requested-With': 'XMLHttpRequest'
-            })
+            # الخطوة 2: الدخول لصفحة الريسيت
+            res = session.get(f"{self.base_url}/accounts/password/reset/", timeout=15)
+            token = self._extract_token(session, res.text)
+            
+            if not token:
+                # هذا الخطأ يحدث غالباً بسبب 429 في الصفحة الأولى
+                return False, "IP Blocked (No Token)"
 
-            try:
-                # تقليل وقت الانتظار لتجربة بروكسيات أكثر بسرعة
-                session.get(f"{self.base_url}/", timeout=5)
-                res = session.get(f"{self.base_url}/accounts/password/reset/", timeout=5)
-                token = self._extract_token(session, res.text)
-                
-                if not token:
-                    continue # بروكسي فاشل، جرب التالي
+            # الخطوة 3: إرسال الطلب
+            headers = {
+                'X-CSRFToken': token,
+                'X-Requested-With': 'XMLHttpRequest',
+                'Referer': f'{self.base_url}/accounts/password/reset/',
+                'Content-Type': 'application/x-www-form-urlencoded'
+            }
+            data = {'email_or_username': self.email, 'csrfmiddlewaretoken': token}
+            
+            response = session.post(f"{self.base_url}/accounts/account_recovery_send_ajax/", 
+                                   data=data, headers=headers, timeout=15)
+            
+            if response.status_code == 200:
+                out = response.json()
+                if out.get('status') == 'ok':
+                    return True, "Success! Check Email."
+                return False, out.get('message', 'Rejected')
+            elif response.status_code == 429:
+                return False, "Rate Limit (Too many requests)"
+            return False, f"Server Error: {response.status_code}"
 
-                headers = {
-                    'X-CSRFToken': token,
-                    'Referer': f'{self.base_url}/accounts/password/reset/',
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                }
-                data = {'email_or_username': self.email, 'csrfmiddlewaretoken': token}
-                
-                response = session.post(
-                    f"{self.base_url}/accounts/account_recovery_send_ajax/", 
-                    data=data, headers=headers, timeout=10
-                )
-                
-                if response.status_code == 200:
-                    out = response.json()
-                    if out.get('status') == 'ok':
-                        return True, "تم الإرسال بنجاح! تفقد بريدك."
-                    else:
-                        msg = out.get('message', '')
-                        # إذا قال انستقرام المستخدم غير موجود، نتوقف ولا نكرر
-                        if 'found' in msg or 'valid' in msg:
-                            return False, f"خطأ في اليوزر: {msg}"
-                        return False, msg # خطأ آخر من انستقرام
-                
-                elif response.status_code == 429:
-                    continue # محظور، جرب بروكسي آخر فوراً
+        except Exception as e:
+            return False, str(e)
 
-            except Exception:
-                continue # خطأ اتصال، جرب بروكسي آخر
-
-        return False, "فشلت الاتصالات، السيرفرات مشغولة جداً."
-
-# --- البوت ---
+# --- إعدادات البوت ---
 class Form(StatesGroup):
     email = State()
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
-limiter = RateLimiter()
+limiter = RateLimiter() # تهيئة نظام المحاولات
 
 @dp.message(Command("start"))
 async def start(message: Message, state: FSMContext):
     user_name = message.from_user.first_name
     
-    # التحقق من الرصيد قبل البدء
+    # فحص الرصيد
     allowed, info = limiter.check_user(message.from_user.id)
     
     if not allowed:
-        await message.answer(f"⛔️ **عفواً، لقد استهلكت محاولاتك لليوم.**\n\nيمكنك المحاولة مجدداً بعد: {info}")
+        await message.answer(f"⛔️ **عفواً، استهلكت الـ 4 محاولات لهذا اليوم.**\n⏰ يمكنك المحاولة مجدداً بتاريخ: {info}")
         return
 
-    # الترحيب المطلوب
+    # الترحيب
     welcome_text = (
         f"أهلاً بك {user_name} في بوت زيرو إكس\n"
         "لارسال رست انستقرام 🫆.\n\n"
         "ضع ايميل حسابك في الانستقرام 👨🏻‍💻.\n"
-        f"⚡️ المحاولات المتبقية لك اليوم: {info}"
+        f"🔢 المحاولات المتبقية: {info}"
     )
     await message.answer(welcome_text)
     await state.set_state(Form.email)
 
 @dp.message(Form.email)
-async def process_reset(message: Message, state: FSMContext):
+async def process_email(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    allowed, info = limiter.check_user(user_id)
+    email = message.text.strip()
     
+    # فحص مزدوج (للتأكد أن المستخدم لم يرسل عدة رسائل بسرعة)
+    allowed, info = limiter.check_user(user_id)
     if not allowed:
         await message.answer("⛔️ انتهت محاولاتك اليومية.")
         await state.clear()
         return
 
-    email = message.text.strip()
-    status_msg = await message.answer("🔄 جاري الاتصال بالسيرفرات وتجاوز الحماية...")
+    status_msg = await message.answer("⏳ جاري المعالجة...")
 
-    # تشغيل الكود الثقيل في خيط منفصل
+    # تشغيل كودك في الخلفية
     master = IGResetMaster(email)
-    success, result = await asyncio.to_thread(master.execute_smartly)
+    
+    # استخدمنا to_thread لكي لا يتجمد البوت
+    success, result = await asyncio.to_thread(master.attempt)
+
+    await state.clear()
 
     if success:
-        limiter.increment_usage(user_id) # خصم محاولة فقط عند النجاح
+        # خصم محاولة فقط عند النجاح
+        limiter.increment_usage(user_id)
+        remains = info - 1
         await status_msg.edit_text(
             f"✅ **تم الارسال الفعلي!**\n\n"
             f"👤 الحساب: `{email}`\n"
-            f"📩 النتيجة: {result}\n"
-            f"📉 المحاولات المتبقية: {info - 1}"
+            f"📩 الحالة: {result}\n"
+            f"📉 المتبقي لك: {remains} محاولات."
         )
     else:
-        # لو فشل بسبب أن اليوزر غلط، نخصم محاولة أيضاً
-        if "خطأ في اليوزر" in result:
-             limiter.increment_usage(user_id)
-             await status_msg.edit_text(f"❌ **فشل الإرسال**\n\nالسبب: {result}")
+        # معالجة الأخطاء
+        if "Rate Limit" in result or "IP Blocked" in result:
+             # لا نخصم محاولة إذا كان الخطأ من السيرفر (429)
+             await status_msg.edit_text("⚠️ **السيرفر مشغول حالياً (429)**\nلم يتم خصم محاولة، الرجاء الانتظار قليلاً والمحاولة لاحقاً.")
         else:
-             # لو فشل بسبب البروكسيات لا نخصم من رصيده
-             await status_msg.edit_text(f"⚠️ **فشل الاتصال**\n\nالسبب: {result}\nحاول مرة أخرى، لم يتم خصم المحاولة.")
-    
-    await state.clear()
+            # نخصم محاولة إذا كان الرفض من انستقرام (مثل يوزر خطأ)
+            limiter.increment_usage(user_id)
+            remains = info - 1
+            await status_msg.edit_text(f"❌ **فشل الإرسال**\n\nالسبب: {result}\n📉 المتبقي لك: {remains}")
 
 async def main():
     logging.basicConfig(level=logging.INFO)
