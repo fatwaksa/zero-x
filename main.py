@@ -29,7 +29,8 @@ class RateLimiter:
             try:
                 with open(self.filename, 'r') as f:
                     return json.load(f)
-            except: return {}
+            except:
+                return {}
         return {}
 
     def _save_data(self):
@@ -59,6 +60,7 @@ class RateLimiter:
             self.data[user_id]["count"] += 1
             self._save_data()
 
+
 # --- الكلاس الأصلي المعتمد (IGResetMaster) ---
 class IGResetMaster:
     def __init__(self, email, proxy_file="proxies.txt"):
@@ -79,15 +81,18 @@ class IGResetMaster:
         return []
 
     def _get_random_proxy(self):
-        if not self.proxies: return None
+        if not self.proxies:
+            return None
         p = random.choice(self.proxies)
         return {"http": f"http://{p}", "https": f"http://{p}"}
 
     def _extract_token(self, session, html):
         token = session.cookies.get('csrftoken')
-        if token: return token
+        if token:
+            return token
         match = re.search(r'"csrf_token":"([^"]+)"', html)
-        if match: return match.group(1)
+        if match:
+            return match.group(1)
         soup = BeautifulSoup(html, 'html.parser')
         meta = soup.find('input', {'name': 'csrfmiddlewaretoken'})
         return meta.get('value') if meta else None
@@ -95,14 +100,16 @@ class IGResetMaster:
     def attempt(self):
         session = requests.Session()
         proxy = self._get_random_proxy()
-        if proxy: session.proxies = proxy
+        if proxy:
+            session.proxies = proxy
         ua = random.choice(self.user_agents)
         session.headers.update({'User-Agent': ua, 'Accept-Language': 'en-US,en;q=0.9'})
         try:
             session.get(f"{self.base_url}/", timeout=15)
             res = session.get(f"{self.base_url}/accounts/password/reset/", timeout=15)
             token = self._extract_token(session, res.text)
-            if not token: return False, "Token Error (IP Blocked)"
+            if not token:
+                return False, "Token Error (IP Blocked)"
             headers = {
                 'X-CSRFToken': token,
                 'X-Requested-With': 'XMLHttpRequest',
@@ -111,22 +118,28 @@ class IGResetMaster:
             }
             data = {'email_or_username': self.email, 'csrfmiddlewaretoken': token}
             response = session.post(f"{self.base_url}/accounts/account_recovery_send_ajax/", 
-                                   data=data, headers=headers, timeout=15)
+                                    data=data, headers=headers, timeout=15)
             if response.status_code == 200:
                 out = response.json()
-                if out.get('status') == 'ok': return True, "Success"
+                if out.get('status') == 'ok':
+                    return True, "Success"
                 return False, out.get('message', 'Rejected')
-            elif response.status_code == 429: return False, "429"
+            elif response.status_code == 429:
+                return False, "429"
             return False, f"HTTP {response.status_code}"
-        except Exception as e: return False, str(e)
+        except Exception as e:
+            return False, str(e)
+
 
 # --- نظام البوت ---
 class Form(StatesGroup):
     email = State()
 
+
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 limiter = RateLimiter()
+
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
@@ -134,15 +147,17 @@ async def cmd_start(message: Message, state: FSMContext):
     if not allowed:
         return await message.answer(f"⛔️ انتهت محاولاتك. عد مجدداً بتاريخ: {info}")
     
-await message.answer(
-    f"أهلاً بك {message.from_user.first_name} في بوت زيرو إكس\n"
-    "لارسال رست انستقرام.\n\n"
-    "ضع ايميل حسابك في الانستقرام.\n"
-    f" المحاولات المتبقية لك: {info}\n\n"
-    "البوت مجاني | مطور: عبدالعزيز الرويلي @em2cc\n"
-    "⚠️ غير مسموح ببيع البوت."
-)
+    # الترحيب والمعلومات داخل الدالة async
+    await message.answer(
+        f"أهلاً بك {message.from_user.first_name} في بوت زيرو إكس\n"
+        "لارسال رست انستقرام.\n\n"
+        "ضع ايميل حسابك في الانستقرام.\n"
+        f"المحاولات المتبقية لك: {info}\n\n"
+        "البوت مجاني | مطور: عبدالعزيز الرويلي @em2cc\n"
+        "⚠️ غير مسموح ببيع البوت."
+    )
     await state.set_state(Form.email)
+
 
 @dp.message(Form.email)
 async def handle_email(message: Message, state: FSMContext):
@@ -156,16 +171,18 @@ async def handle_email(message: Message, state: FSMContext):
     await state.clear()
     if success:
         limiter.increment_usage(user_id)
-        await status_msg.edit_text(f"✅ **تم الارسال الفعلي!**\n👤 الحساب: `{email}`\n📥 تفقد بريدك الآن.")
+        await status_msg.edit_text(f"✅ تم الارسال الفعلي!\nالحساب: `{email}`\nتفقد بريدك الآن.")
     else:
         if "429" in result:
-            await status_msg.edit_text("❌ **فشل: حظر مؤقت (429)**\nلم يتم خصم محاولة، انتظر 10 دقائق.")
+            await status_msg.edit_text("❌ فشل: حظر مؤقت (429)\nلم يتم خصم محاولة، انتظر 10 دقائق.")
         else:
             limiter.increment_usage(user_id)
-            await status_msg.edit_text(f"❌ **فشل الإرسال**\nالسبب: {result}")
+            await status_msg.edit_text(f"❌ فشل الإرسال\nالسبب: {result}")
+
 
 async def main():
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
