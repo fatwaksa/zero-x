@@ -1,9 +1,10 @@
 import os
 import json
 import asyncio
-import random
+import logging
 import requests
 import re
+import random
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher
@@ -11,12 +12,11 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.enums import ParseMode  # لدعم الروابط Markdown
 
 # --- الإعدادات ---
 TOKEN = os.getenv("BOT_TOKEN")
 
-# --- نظام إدارة المحاولات ---
+# --- نظام إدارة المحاولات (4 محاولات كل 24 ساعة) ---
 class RateLimiter:
     def __init__(self, filename="limits.json"):
         self.filename = filename
@@ -61,7 +61,7 @@ class RateLimiter:
             self._save_data()
 
 
-# --- كلاس إعادة تعيين Instagram ---
+# --- الكلاس الأصلي المعتمد (IGResetMaster) ---
 class IGResetMaster:
     def __init__(self, email, proxy_file="proxies.txt"):
         self.email = email.lower().strip()
@@ -117,7 +117,7 @@ class IGResetMaster:
                 'Content-Type': 'application/x-www-form-urlencoded'
             }
             data = {'email_or_username': self.email, 'csrfmiddlewaretoken': token}
-            response = session.post(f"{self.base_url}/accounts/account_recovery_send_ajax/",
+            response = session.post(f"{self.base_url}/accounts/account_recovery_send_ajax/", 
                                     data=data, headers=headers, timeout=15)
             if response.status_code == 200:
                 out = response.json()
@@ -131,7 +131,7 @@ class IGResetMaster:
             return False, str(e)
 
 
-# --- نظام FSM للبوت ---
+# --- نظام البوت ---
 class Form(StatesGroup):
     email = State()
 
@@ -141,55 +141,48 @@ dp = Dispatcher()
 limiter = RateLimiter()
 
 
-# --- أمر البداية ---
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     allowed, info = limiter.check_user(message.from_user.id)
     if not allowed:
         return await message.answer(f"⛔️ انتهت محاولاتك. عد مجدداً بتاريخ: {info}")
-
-    # الترحيب داخل نفس البلوك
-    await message.answer(
-        f"🚀 أهلاً بك {message.from_user.first_name} في بوت زيرو إكس – Instagram Reset 👋\n\n"
-        "👋 استعد لإعادة تعيين كلمة مرور حسابك على Instagram بكل سهولة.\n\n"
-        "📧 أدخل إيميل حسابك للبدء.\n"
-        f"🔢 المحاولات المتبقية لك: {info}\n\n"
-        "💡 البوت مجاني 100٪ | [قناتي](https://t.me/i3azz)\n"
-        "⚠️ يمنع بيع أو إعادة نشر البوت للحفاظ على أمان الجميع.",
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-    # تعيين الحالة
+    
+    # الترحيب والمعلومات داخل الدالة async
+await message.answer(
+    f"🚀 أهلاً بك {message.from_user.first_name} في بوت زيرو إكس – Instagram Reset\n\n"
+    "👋 استعد لإعادة تعيين كلمة مرور حسابك على Instagram بكل سهولة.\n\n"
+    "📧 أدخل إيميل حسابك للبدء.\n"
+    f" المحاولات المتبقية لك: {info}\n\n"
+    "💡 البوت مجاني 100٪ | مطور: عبدالعزيز الرويلي [@em2cc](https://t.me/em2cc)\n"
+    "⚠️ يمنع بيع أو إعادة نشر البوت للحفاظ على أمان الجميع."
+)
     await state.set_state(Form.email)
 
 
-# --- التعامل مع البريد الإلكتروني ---
 @dp.message(Form.email)
 async def handle_email(message: Message, state: FSMContext):
     user_id = message.from_user.id
     email = message.text.strip()
     status_msg = await message.answer("⏳ جاري الإرسال...")
-
+    
     master = IGResetMaster(email)
     success, result = await asyncio.to_thread(master.attempt)
-
+    
     await state.clear()
     if success:
         limiter.increment_usage(user_id)
-        await status_msg.edit_text(f"✅ تم الإرسال بنجاح!\nالحساب: `{email}`\nتفقد بريدك الآن.")
+        await status_msg.edit_text(f"✅ تم الارسال الفعلي!\nالحساب: `{email}`\nتفقد بريدك الآن.")
     else:
         if "429" in result:
-            # لا تخصم محاولة عند 429
             await status_msg.edit_text("❌ فشل: حظر مؤقت (429)\nلم يتم خصم محاولة، انتظر 10 دقائق.")
         else:
             limiter.increment_usage(user_id)
             await status_msg.edit_text(f"❌ فشل الإرسال\nالسبب: {result}")
 
 
-# --- تشغيل البوت ---
 async def main():
     await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main()) حسّنه
