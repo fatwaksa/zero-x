@@ -65,7 +65,6 @@ class RateLimiter:
             self.data[user_id]["count"] += 1
             self._save_data()
 
-
 # --- كلاس إعادة تعيين Instagram ---
 class IGResetMaster:
     def __init__(self, email, proxy_file="proxies.txt"):
@@ -137,16 +136,13 @@ class IGResetMaster:
         except Exception as e:
             return False, str(e)
 
-
 # --- نظام FSM للبوت ---
 class Form(StatesGroup):
     email = State()
 
-
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 limiter = RateLimiter()
-
 
 # --- أمر البداية ---
 @dp.message(Command("start"))
@@ -155,19 +151,18 @@ async def cmd_start(message: Message, state: FSMContext):
     if not allowed:
         return await message.answer(f"⛔️ انتهت محاولاتك. عد مجدداً بتاريخ: {info}")
 
-    # رسالة ترحيبية محسنة
-await message.answer(
-    f"🚀 أهلاً بك {message.from_user.first_name} في بوت زيرو إكس – Instagram Reset\n\n"
-    "👋 استعد لإعادة تعيين كلمة مرور حسابك على Instagram بكل سهولة.\n\n"
-    "📧 أدخل إيميل حسابك للبدء.\n"
-    f" المحاولات المتبقية لك: {info}\n\n"
-    "💡 البوت مجاني 100٪ | [قناتنا اشترك فيها ](https://t.me/YourChannelName)\n"
-    "⚠️ يمنع بيع أو إعادة نشر البوت للحفاظ على أمان الجميع."
-)
+    # رسالة ترحيب محسنة مع رابط القناة
+    await message.answer(
+        f"🚀 أهلاً بك {message.from_user.first_name} في بوت زيرو إكس – Instagram Reset\n\n"
+        "👋 استعد لإعادة تعيين كلمة مرور حسابك على Instagram بكل سهولة.\n\n"
+        "📧 أدخل إيميل حسابك للبدء.\n"
+        f"🔢 المحاولات المتبقية لك: {info}\n\n"
+        "💡 البوت مجاني 100٪ | [قناتي](https://t.me/YourChannelName)\n"
+        "⚠️ يمنع بيع أو إعادة نشر البوت للحفاظ على أمان الجميع."
+    )
 
-    # تعيين الحالة
+    # تعيين الحالة ضمن نفس البلوك
     await state.set_state(Form.email)
-
 
 # --- التعامل مع البريد الإلكتروني ---
 @dp.message(Form.email)
@@ -190,11 +185,9 @@ async def handle_email(message: Message, state: FSMContext):
             limiter.increment_usage(user_id)
             await status_msg.edit_text(f"❌ فشل الإرسال\nالسبب: {result}")
 
-
 # --- تشغيل البوت ---
 async def main():
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
